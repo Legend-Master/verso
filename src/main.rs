@@ -1,6 +1,9 @@
 // Prevent console window from appearing on Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::time::Duration;
+
+use shared::{IpcMessageToController, IpcMessageToVersoview};
 use verso::config::Config;
 use verso::{Result, Verso};
 use winit::application::ApplicationHandler;
@@ -37,7 +40,38 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Args used by the IPC server
+#[derive(Debug, argh::FromArgs)]
+struct IpcServerArgs {
+    /// an optional nickname for the pilot
+    #[argh(option)]
+    ipc_channel: Option<String>,
+}
+
 fn main() -> Result<()> {
+    let server_args: IpcServerArgs = argh::from_env();
+    if let Some(channel_name) = server_args.ipc_channel {
+        // ipc_channel::ipc::IpcOneShotServer
+        dbg!(&channel_name);
+        let (controller_sender, receiver) =
+            ipc_channel::ipc::channel::<IpcMessageToVersoview>().unwrap();
+        let sender =
+            ipc_channel::ipc::IpcSender::<IpcMessageToController>::connect(channel_name).unwrap();
+        sender
+            .send(IpcMessageToController::IpcSender(controller_sender))
+            .unwrap();
+        sender
+            .send(IpcMessageToController::Message("data".to_owned()))
+            .unwrap();
+        sender
+            .send(IpcMessageToController::Message("more data".to_owned()))
+            .unwrap();
+        while let Ok(data) = receiver.try_recv_timeout(Duration::from_secs(1)) {
+            dbg!(data);
+        }
+        return Ok(());
+    }
+
     let event_loop = EventLoop::new()?;
     event_loop.listen_device_events(DeviceEvents::Never);
     let proxy = event_loop.create_proxy();

@@ -1,0 +1,8 @@
+[package]
+name = "versoview"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ipc-channel = { workspace = true }
+shared = { path = "../shared" }
