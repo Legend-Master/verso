@@ -14,11 +14,15 @@ pub fn init(versoview_path: PathBuf) {
         panic!();
     };
     while let Ok(data) = reveiver.recv() {
-        if let IpcMessageToController::Message(message) = data {
-            dbg!(&message);
-            sender
-                .send(IpcMessageToVersoview::Message(message))
-                .unwrap();
-        }
+        match data {
+            IpcMessageToController::Echo(value, sender) => sender.send(value).unwrap(),
+            IpcMessageToController::Message(message) => {
+                dbg!(&message);
+                sender
+                    .send(IpcMessageToVersoview::Message(message))
+                    .unwrap();
+            }
+            _ => {}
+        };
     }
 }

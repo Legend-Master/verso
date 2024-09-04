@@ -69,6 +69,11 @@ fn main() -> Result<()> {
             std::thread::sleep(Duration::from_millis(10));
             dbg!(data);
         }
+        let (echo_sender, echo_receiver) = ipc_channel::ipc::channel::<String>().unwrap();
+        sender
+            .send(IpcMessageToController::Echo("echo".to_owned(), echo_sender))
+            .unwrap();
+        dbg!(echo_receiver.recv().unwrap());
         return Ok(());
     }
 
