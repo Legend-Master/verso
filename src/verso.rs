@@ -396,7 +396,7 @@ impl Verso {
 
         verso.setup_logging();
         if let Some(webview_mode_args) = webview_mode_args {
-            verso.start_handle_versoview_controller_messages(webview_mode_args, proxy);
+            verso.start_handling_versoview_controller_messages(webview_mode_args, proxy);
         }
         verso
     }
@@ -539,7 +539,7 @@ impl Verso {
     }
 
     /// Start to handle versoview controller messages
-    pub fn start_handle_versoview_controller_messages(
+    pub fn start_handling_versoview_controller_messages(
         &self,
         webview_mode_args: IpcServerArgs,
         proxy: EventLoopProxy<EventLoopProxyMessage>,
@@ -573,7 +573,11 @@ impl Verso {
 
         std::thread::spawn(move || {
             while let Ok(message) = receiver.recv() {
-                let _ = proxy.send_event(EventLoopProxyMessage::WebviewControllerMessage(message));
+                if let Err(e) =
+                    proxy.send_event(EventLoopProxyMessage::WebviewControllerMessage(message))
+                {
+                    log::error!("Failed to send controller message to Verso: {e}");
+                }
             }
         });
     }
@@ -618,7 +622,7 @@ impl EventLoopWaker for Waker {
 
     fn wake(&self) {
         if let Err(e) = self.0.send_event(EventLoopProxyMessage::Wake) {
-            log::error!("Servo failed to send wake up event to Verso: {}", e);
+            log::error!("Servo failed to send wake up event to Verso: {e}");
         }
     }
 }
