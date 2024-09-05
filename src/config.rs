@@ -3,13 +3,23 @@ use std::{fs, path::PathBuf};
 use embedder_traits::resources::{self, Resource, ResourceReaderMethods};
 use servo_config::opts::{default_opts, set_options, Opts};
 
+/// Args used in the webview mode
+#[derive(Debug, Clone, argh::FromArgs)]
+pub struct IpcServerArgs {
+    /// the IPC channel id
+    #[argh(option)]
+    pub ipc_channel: Option<String>,
+}
+
 /// Configuration of Verso instance.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Global flag options of Servo.
-    pub opts: Opts,
+    pub servo_opts: Opts,
     /// Path to resources directory.
     pub resource_dir: PathBuf,
+    /// Args for running in webview mode.
+    pub webview_mode_args: Option<IpcServerArgs>,
 }
 
 impl Config {
@@ -17,7 +27,20 @@ impl Config {
     /// resources directory.
     pub fn new(resource_dir: PathBuf) -> Self {
         let opts = default_opts();
-        Self { opts, resource_dir }
+
+        let server_args: IpcServerArgs = argh::from_env();
+        let webview_mode_args = if let Some(channel_name) = &server_args.ipc_channel {
+            dbg!(&channel_name);
+            Some(server_args)
+        } else {
+            None
+        };
+
+        Self {
+            servo_opts: opts,
+            resource_dir,
+            webview_mode_args,
+        }
     }
 
     /// Init options and preferences.
@@ -26,7 +49,7 @@ impl Config {
         resources::set(Box::new(ResourceReader(self.resource_dir)));
 
         // Set the global options of Servo.
-        set_options(self.opts);
+        set_options(self.servo_opts);
     }
 }
 

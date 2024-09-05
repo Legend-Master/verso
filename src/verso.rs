@@ -29,6 +29,7 @@ use script::{self, JSEngineSetup};
 use script_traits::WindowSizeData;
 use servo_config::{opts, pref};
 use servo_url::ServoUrl;
+use shared::{IpcMessageToController, IpcMessageToVersoview};
 use style;
 use units::DeviceIntRect;
 use webgpu;
@@ -44,7 +45,7 @@ use winit::{
 
 use crate::{
     compositor::{IOCompositor, InitialCompositorState, ShutdownState},
-    config::Config,
+    config::{Config, IpcServerArgs},
     webview::WebView,
     window::Window,
 };
@@ -80,12 +81,17 @@ impl Verso {
     /// - Font cache
     /// - Canvas
     /// - Constellation
-    pub fn new(evl: &ActiveEventLoop, proxy: EventLoopProxy<()>, config: Config) -> Self {
+    pub fn new(
+        evl: &ActiveEventLoop,
+        proxy: EventLoopProxy<EventLoopProxyMessage>,
+        config: Config,
+    ) -> Self {
         // Initialize configurations and Verso window
         let resource_dir = config.resource_dir.clone();
+        let webview_mode_args = config.webview_mode_args.clone();
         config.init();
-        let (window, rendering_context) = Window::new(evl);
-        let event_loop_waker = Box::new(Waker(proxy));
+        let (mut window, rendering_context) = Window::new(evl);
+        let event_loop_waker = Box::new(Waker(proxy.clone()));
         let opts = opts::get();
 
         // Set Stylo flags
@@ -347,15 +353,32 @@ impl Verso {
             opts.debug.convert_mouse_to_touch,
         );
 
-        // Send the constellation message to start Panel UI
-        // TODO: Should become a window method
-        let panel_id = window.panel.as_ref().unwrap().webview_id;
-        let path = resource_dir.join("panel.html");
-        let url = ServoUrl::from_file_path(path.to_str().unwrap()).unwrap();
-        send_to_constellation(
-            &constellation_sender,
-            ConstellationMsg::NewWebView(url, panel_id),
-        );
+        if webview_mode_args.is_some() {
+            // Reserving a namespace to create TopLevelBrowsingContextId.
+            base::id::PipelineNamespace::install(base::id::PipelineNamespaceId(0));
+            let demo_url = ServoUrl::parse("https://example.com").unwrap();
+            let demo_id = WebViewId::new();
+            let size = window.size();
+            let rect = DeviceIntRect::from_size(size);
+            let mut webview = WebView::new(demo_id, rect);
+            webview.set_size(window.get_content_rect(rect));
+            window.webview.replace(webview);
+            send_to_constellation(
+                &constellation_sender,
+                ConstellationMsg::NewWebView(demo_url, demo_id),
+            );
+        } else {
+            // Send the constellation message to start Panel UI
+            // TODO: Should become a window method
+            let webview = window.create_panel();
+            let panel_id = webview.webview_id;
+            let path = resource_dir.join("panel.html");
+            let url = ServoUrl::from_file_path(path.to_str().unwrap()).unwrap();
+            send_to_constellation(
+                &constellation_sender,
+                ConstellationMsg::NewWebView(url, panel_id),
+            );
+        }
 
         let mut windows = HashMap::new();
         windows.insert(window.id(), window);
@@ -372,6 +395,9 @@ impl Verso {
         };
 
         verso.setup_logging();
+        if let Some(webview_mode_args) = webview_mode_args {
+            verso.start_handle_versoview_controller_messages(webview_mode_args, proxy);
+        }
         verso
     }
 
@@ -497,6 +523,61 @@ impl Verso {
         }
     }
 
+    /// Handle versoview controller message
+    pub fn handle_versoview_controller_message(&self, message: IpcMessageToVersoview) {
+        match message {
+            IpcMessageToVersoview::Message(_) => {}
+            IpcMessageToVersoview::NavigateTo(url) => {
+                let window = self.windows.values().next().unwrap();
+                let webview_id = window.webview.as_ref().unwrap().webview_id;
+                send_to_constellation(
+                    &self.constellation_sender,
+                    ConstellationMsg::LoadUrl(webview_id, ServoUrl::parse(&url).unwrap()),
+                );
+            }
+        }
+    }
+
+    /// Start to handle versoview controller messages
+    pub fn start_handle_versoview_controller_messages(
+        &self,
+        webview_mode_args: IpcServerArgs,
+        proxy: EventLoopProxy<EventLoopProxyMessage>,
+    ) {
+        let channel_name = webview_mode_args.ipc_channel.unwrap();
+        let sender =
+            ipc_channel::ipc::IpcSender::<IpcMessageToController>::connect(channel_name).unwrap();
+
+        let (controller_sender, receiver) =
+            ipc_channel::ipc::channel::<IpcMessageToVersoview>().unwrap();
+        sender
+            .send(IpcMessageToController::IpcSender(controller_sender))
+            .unwrap();
+
+        // let (echo_sender, echo_receiver) = ipc_channel::ipc::channel::<String>().unwrap();
+        // sender
+        //     .send(IpcMessageToController::Echo("echo".to_owned(), echo_sender))
+        //     .unwrap();
+        // dbg!(echo_receiver.recv().unwrap());
+
+        // sender
+        //     .send(IpcMessageToController::Message("data".to_owned()))
+        //     .unwrap();
+        // sender
+        //     .send(IpcMessageToController::Message("more data".to_owned()))
+        //     .unwrap();
+        // while let Ok(data) = receiver.recv() {
+        //     std::thread::sleep(Duration::from_millis(10));
+        //     dbg!(data);
+        // }
+
+        std::thread::spawn(move || {
+            while let Ok(message) = receiver.recv() {
+                let _ = proxy.send_event(EventLoopProxyMessage::WebviewControllerMessage(message));
+            }
+        });
+    }
+
     /// Return true if one of the Verso windows is animating.
     pub fn is_animating(&self) -> bool {
         self.compositor
@@ -519,8 +600,16 @@ impl Verso {
     }
 }
 
+/// Message send to the event loop
+pub enum EventLoopProxyMessage {
+    /// Wake
+    Wake,
+    /// Message coming from the webview controller
+    WebviewControllerMessage(IpcMessageToVersoview),
+}
+
 #[derive(Debug, Clone)]
-struct Waker(pub EventLoopProxy<()>);
+struct Waker(pub EventLoopProxy<EventLoopProxyMessage>);
 
 impl EventLoopWaker for Waker {
     fn clone_box(&self) -> Box<dyn EventLoopWaker> {
@@ -528,7 +617,7 @@ impl EventLoopWaker for Waker {
     }
 
     fn wake(&self) {
-        if let Err(e) = self.0.send_event(()) {
+        if let Err(e) = self.0.send_event(EventLoopProxyMessage::Wake) {
             log::error!("Servo failed to send wake up event to Verso: {}", e);
         }
     }

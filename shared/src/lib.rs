@@ -10,4 +10,5 @@ pub enum IpcMessageToController {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IpcMessageToVersoview {
     Message(String),
+    NavigateTo(String),
 }

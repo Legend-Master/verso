@@ -1,10 +1,8 @@
 // Prevent console window from appearing on Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::time::Duration;
-
-use shared::{IpcMessageToController, IpcMessageToVersoview};
 use verso::config::Config;
+use verso::verso::EventLoopProxyMessage;
 use verso::{Result, Verso};
 use winit::application::ApplicationHandler;
 use winit::event_loop::{self, DeviceEvents};
@@ -12,10 +10,10 @@ use winit::event_loop::{EventLoop, EventLoopProxy};
 
 struct App {
     verso: Option<Verso>,
-    proxy: EventLoopProxy<()>,
+    proxy: EventLoopProxy<EventLoopProxyMessage>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<EventLoopProxyMessage> for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let config = Config::new(resources_dir_path().unwrap());
         self.verso = Some(Verso::new(event_loop, self.proxy.clone(), config));
@@ -33,51 +31,26 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &event_loop::ActiveEventLoop, _: ()) {
+    fn user_event(
+        &mut self,
+        event_loop: &event_loop::ActiveEventLoop,
+        event: EventLoopProxyMessage,
+    ) {
         if let Some(v) = self.verso.as_mut() {
-            v.handle_servo_messages(event_loop);
+            match event {
+                EventLoopProxyMessage::Wake => {
+                    v.handle_servo_messages(event_loop);
+                }
+                EventLoopProxyMessage::WebviewControllerMessage(message) => {
+                    v.handle_versoview_controller_message(message);
+                }
+            }
         }
     }
-}
-
-/// Args used in the webview mode
-#[derive(Debug, argh::FromArgs)]
-struct IpcServerArgs {
-    /// the IPC channel id
-    #[argh(option)]
-    ipc_channel: Option<String>,
 }
 
 fn main() -> Result<()> {
-    let server_args: IpcServerArgs = argh::from_env();
-    if let Some(channel_name) = server_args.ipc_channel {
-        dbg!(&channel_name);
-        let sender =
-            ipc_channel::ipc::IpcSender::<IpcMessageToController>::connect(channel_name).unwrap();
-        let (controller_sender, receiver) =
-            ipc_channel::ipc::channel::<IpcMessageToVersoview>().unwrap();
-        sender
-            .send(IpcMessageToController::IpcSender(controller_sender))
-            .unwrap();
-        sender
-            .send(IpcMessageToController::Message("data".to_owned()))
-            .unwrap();
-        sender
-            .send(IpcMessageToController::Message("more data".to_owned()))
-            .unwrap();
-        while let Ok(data) = receiver.try_recv_timeout(Duration::from_secs(1)) {
-            std::thread::sleep(Duration::from_millis(10));
-            dbg!(data);
-        }
-        let (echo_sender, echo_receiver) = ipc_channel::ipc::channel::<String>().unwrap();
-        sender
-            .send(IpcMessageToController::Echo("echo".to_owned(), echo_sender))
-            .unwrap();
-        dbg!(echo_receiver.recv().unwrap());
-        return Ok(());
-    }
-
-    let event_loop = EventLoop::new()?;
+    let event_loop = EventLoop::<EventLoopProxyMessage>::with_user_event().build()?;
     event_loop.listen_device_events(DeviceEvents::Never);
     let proxy = event_loop.create_proxy();
     let mut app = App { verso: None, proxy };
