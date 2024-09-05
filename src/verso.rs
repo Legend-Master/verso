@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{atomic::Ordering, Arc},
+    time::Duration,
 };
 
 use arboard::Clipboard;
@@ -45,7 +46,7 @@ use winit::{
 
 use crate::{
     compositor::{IOCompositor, InitialCompositorState, ShutdownState},
-    config::{Config, IpcServerArgs},
+    config::Config,
     webview::WebView,
     window::Window,
 };
@@ -54,6 +55,7 @@ use crate::{
 pub struct Verso {
     windows: HashMap<WindowId, Window>,
     compositor: Option<IOCompositor>,
+    controller_sender: Option<ipc::IpcSender<IpcMessageToController>>,
     constellation_sender: Sender<ConstellationMsg>,
     embedder_receiver: EmbedderReceiver,
     /// For single-process Servo instances, this field controls the initialization
@@ -353,7 +355,7 @@ impl Verso {
             opts.debug.convert_mouse_to_touch,
         );
 
-        if webview_mode_args.is_some() {
+        let controller_sender = if let Some(webview_mode_args) = &webview_mode_args {
             // Reserving a namespace to create TopLevelBrowsingContextId.
             base::id::PipelineNamespace::install(base::id::PipelineNamespaceId(0));
             let demo_url = ServoUrl::parse("https://example.com").unwrap();
@@ -367,6 +369,12 @@ impl Verso {
                 &constellation_sender,
                 ConstellationMsg::NewWebView(demo_url, demo_id),
             );
+
+            let channel_name = webview_mode_args.ipc_channel.to_owned().unwrap();
+            let sender =
+                ipc_channel::ipc::IpcSender::<IpcMessageToController>::connect(channel_name)
+                    .unwrap();
+            Some(sender)
         } else {
             // Send the constellation message to start Panel UI
             // TODO: Should become a window method
@@ -378,7 +386,8 @@ impl Verso {
                 &constellation_sender,
                 ConstellationMsg::NewWebView(url, panel_id),
             );
-        }
+            None
+        };
 
         let mut windows = HashMap::new();
         windows.insert(window.id(), window);
@@ -387,6 +396,7 @@ impl Verso {
         let verso = Verso {
             windows,
             compositor: Some(compositor),
+            controller_sender,
             constellation_sender,
             embedder_receiver,
             _js_engine_setup: js_engine_setup,
@@ -395,8 +405,8 @@ impl Verso {
         };
 
         verso.setup_logging();
-        if let Some(webview_mode_args) = webview_mode_args {
-            verso.start_handling_versoview_controller_messages(webview_mode_args, proxy);
+        if webview_mode_args.is_some() {
+            verso.start_handling_versoview_controller_messages(proxy);
         }
         verso
     }
@@ -437,6 +447,13 @@ impl Verso {
                     compositor.shutdown_state
                 );
                 while let Some((webview_id, msg)) = self.embedder_receiver.try_recv_embedder_msg() {
+                    if let Some(controller_sender) = &self.controller_sender {
+                        controller_sender
+                            .send(IpcMessageToController::Message(
+                                "new embedder message".to_owned(),
+                            ))
+                            .unwrap();
+                    }
                     match compositor.shutdown_state {
                         ShutdownState::NotShuttingDown => {
                             if let Some(id) = webview_id {
@@ -526,7 +543,11 @@ impl Verso {
     /// Handle versoview controller message
     pub fn handle_versoview_controller_message(&self, message: IpcMessageToVersoview) {
         match message {
-            IpcMessageToVersoview::Message(_) => {}
+            IpcMessageToVersoview::Message(message) => {
+                // So we don't print at the same time to console
+                std::thread::sleep(Duration::from_millis(10));
+                dbg!(message);
+            }
             IpcMessageToVersoview::NavigateTo(url) => {
                 let window = self.windows.values().next().unwrap();
                 let webview_id = window.webview.as_ref().unwrap().webview_id;
@@ -535,19 +556,15 @@ impl Verso {
                     ConstellationMsg::LoadUrl(webview_id, ServoUrl::parse(&url).unwrap()),
                 );
             }
-        }
+        };
     }
 
     /// Start to handle versoview controller messages
     pub fn start_handling_versoview_controller_messages(
         &self,
-        webview_mode_args: IpcServerArgs,
         proxy: EventLoopProxy<EventLoopProxyMessage>,
     ) {
-        let channel_name = webview_mode_args.ipc_channel.unwrap();
-        let sender =
-            ipc_channel::ipc::IpcSender::<IpcMessageToController>::connect(channel_name).unwrap();
-
+        let sender = self.controller_sender.as_ref().unwrap();
         let (controller_sender, receiver) =
             ipc_channel::ipc::channel::<IpcMessageToVersoview>().unwrap();
         sender
