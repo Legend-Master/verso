@@ -24,6 +24,8 @@ pub struct CliArgs {
     pub window_attributes: WindowAttributes,
     /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
     pub devtools_port: Option<u16>,
+    /// Port number to start a server to listen to remote WebDriver commands
+    pub webdriver_port: Option<u16>,
 }
 
 /// Configuration of Verso instance.
@@ -53,6 +55,12 @@ fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         "",
         "devtools-port",
         "Launch Verso with devtools server enabled and listen to port",
+        "port",
+    );
+    opts.optopt(
+        "",
+        "webdriver-port",
+        "Launch Verso with WebDriver server enabled and listen to port",
         "port",
     );
 
@@ -102,6 +110,12 @@ fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         log::error!("Failed to parse devtools-port command line argument: {e}");
         None
     });
+    let webdriver_port = matches
+        .opt_get::<u16>("webdriver-port")
+        .unwrap_or_else(|e| {
+            log::error!("Failed to parse webdriver-port command line argument: {e}");
+            None
+        });
 
     let mut window_attributes = winit::window::Window::default_attributes();
 
@@ -154,6 +168,7 @@ fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         no_panel,
         window_attributes,
         devtools_port,
+        webdriver_port,
     })
 }
 
@@ -167,6 +182,10 @@ impl Config {
         if let Some(devtools_port) = args.devtools_port {
             opts.devtools_server_enabled = true;
             opts.devtools_port = devtools_port;
+        }
+
+        if let Some(webdriver_port) = args.webdriver_port {
+            opts.webdriver_port = Some(webdriver_port);
         }
 
         Self {
