@@ -580,7 +580,7 @@ impl Verso {
     }
 
     /// Handle message came from webview controller.
-    pub fn handle_incoming_webview_message(&self, message: ControllerMessage) {
+    pub fn handle_incoming_webview_message(&mut self, message: ControllerMessage) {
         match message {
             ControllerMessage::NavigateTo(to_url) => {
                 if let Some(webview_id) =
@@ -592,6 +592,14 @@ impl Verso {
                         &self.constellation_sender,
                         ConstellationMsg::LoadUrl(webview_id, ServoUrl::from_url(to_url)),
                     );
+                }
+            }
+            ControllerMessage::OnNavigationStarting(sender) => {
+                if let Some((window, _)) = self.windows.values_mut().next() {
+                    window
+                        .event_listeners
+                        .on_navigation_starting
+                        .replace(sender);
                 }
             }
             _ => {}
